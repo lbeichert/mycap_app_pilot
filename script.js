@@ -113,7 +113,9 @@ function renderPage(index) {
              </div>
              <p id="timedStatus">Samples: 0</p>
              <p id="timedCountdown" style="font-size:1.5em;font-weight:bold;display:none;"></p>
-             <canvas id="timedAccCanvas" width="600" height="200" style="width:100%;max-width:600px;background:#fff;border:1px solid #ddd;"></canvas>
+             <!-- Two canvases: acceleration (top) and gyroscope (bottom) -->
+             <canvas id="timedAccCanvas" width="600" height="180" style="width:100%;max-width:600px;background:#fff;border:1px solid #ddd;margin-bottom:8px;"></canvas>
+             <canvas id="timedGyroCanvas" width="600" height="140" style="width:100%;max-width:600px;background:#fff;border:1px solid #ddd;"></canvas>
              <div class="mt-2">
                <button id="timedNext" class="btn btn-primary" style="display:none;margin-right:8px;">Next</button>
                <button id="timedSkip" class="btn btn-secondary">Skip</button>
@@ -128,8 +130,10 @@ function renderPage(index) {
                <button id="downloadCsv" class="btn btn-success" style="display:none;margin-left:8px;">Download CSV</button>
              </div>
              <p id="accStatus">Samples: 0</p>
-            <p id="accCountdown" style="font-size:1.25em;font-weight:bold;display:none;"> </p>
-             <canvas id="accCanvas" width="600" height="200" style="width:100%;max-width:600px;background:#fff;border:1px solid #ddd;"></canvas>
+             <p id="accCountdown" style="font-size:1.25em;font-weight:bold;display:none;"> </p>
+             <!-- Two canvases: acceleration (top) and gyroscope (bottom) -->
+             <canvas id="accCanvas" width="600" height="180" style="width:100%;max-width:600px;background:#fff;border:1px solid #ddd;margin-bottom:8px;"></canvas>
+             <canvas id="gyroCanvas" width="600" height="140" style="width:100%;max-width:600px;background:#fff;border:1px solid #ddd;"></canvas>
              <div class="mt-2">
                <button id="accNext" class="btn btn-primary" style="display:none;margin-right:8px;">Next</button>
                <button id="skipAcc" class="btn btn-secondary">Skip</button>
@@ -321,84 +325,183 @@ function setupCaptureAcceleration() {
 }
 
 function showAccGraph(accRecorder) {
-  const canvas = document.getElementById('accCanvas');
-  if (!canvas) return;
-  const ctx = canvas.getContext('2d');
-  const w = canvas.width;
-  const h = canvas.height;
-  // Clear
-  ctx.clearRect(0, 0, w, h);
-  if (!accRecorder || accRecorder.length === 0) {
-    ctx.fillStyle = '#666'; ctx.fillText('No samples to display', 10, 20); return;
-  }
+  // Acceleration canvas
+  const accCanvas = document.getElementById('accCanvas');
+  const gyroCanvas = document.getElementById('gyroCanvas');
+  if (!accCanvas && !gyroCanvas) return;
 
-  // Prepare data arrays and time range
-  const times = accRecorder.map(s => s.timestamp);
-  const xs = accRecorder.map(s => s.x || 0);
-  const ys = accRecorder.map(s => s.y || 0);
-  const zs = accRecorder.map(s => s.z || 0);
-  // compute gyro magnitude (deg/s) if present
-  const gmag = accRecorder.map(s => {
-    const a = s.gyroAlpha || 0, b = s.gyroBeta || 0, c = s.gyroGamma || 0;
-    return Math.sqrt(a*a + b*b + c*c);
-  });
-  const tMin = Math.min(...times);
-  const tMax = Math.max(...times);
+  // Helper to draw a series on a given canvas with its own scaling and legend
+  function drawOnCanvas(canvas, seriesList, options = {}) {
+    const ctx = canvas.getContext('2d');
+    const w = canvas.width; const h = canvas.height;
+    ctx.clearRect(0,0,w,h);
+    if (!seriesList || seriesList.length === 0 || seriesList[0].data.length === 0) {
+      ctx.fillStyle = '#666'; ctx.fillText('No samples to display', 10, 20); return;
+    }
+    const times = seriesList[0].times;
+    const tMin = Math.min(...times); const tMax = Math.max(...times);
+    // compute vMin/vMax across provided series
+    const vals = [].concat(...seriesList.map(s => s.data));
+    const vMin = Math.min(...vals); const vMax = Math.max(...vals);
+    const pad = 10;
+    function tx(t) { return pad + ((t - tMin) / (tMax - tMin || 1)) * (w - pad * 2); }
+    function ty(v) { return h - pad - ((v - vMin) / (vMax - vMin || 1)) * (h - pad * 2); }
 
-  // Calculate mean sampling rate (Hz)
-  const durationSec = (tMax - tMin) / 1000;
-  const meanSamplingRate = durationSec > 0 ? (accRecorder.length / durationSec) : 0;
+    // Draw axes/grid
+    ctx.strokeStyle = '#ccc'; ctx.lineWidth = 1; ctx.beginPath(); ctx.moveTo(pad,pad); ctx.lineTo(pad,h-pad); ctx.lineTo(w-pad,h-pad); ctx.stroke();
+    ctx.strokeStyle = '#f0f0f0';
+    for (let i=0;i<=4;i++){ const y = pad + (i/4)*(h-pad*2); ctx.beginPath(); ctx.moveTo(pad,y); ctx.lineTo(w-pad,y); ctx.stroke(); }
 
-  // Draw mean sampling rate above the graph
-  ctx.fillStyle = '#333';
-  ctx.font = '16px sans-serif';
-  ctx.fillText(`Mean Sampling Rate: ${meanSamplingRate.toFixed(1)} Hz`, 10, 28);
-
-  // include gyro magnitude in min/max so it scales into the plotting area
-  const vMin = Math.min(...xs, ...ys, ...zs, ...gmag);
-  const vMax = Math.max(...xs, ...ys, ...zs, ...gmag);
-  const pad = 10;
-
-  function tx(t) { return pad + ((t - tMin) / (tMax - tMin || 1)) * (w - pad * 2); }
-  function ty(v) { return h - pad - ((v - vMin) / (vMax - vMin || 1)) * (h - pad * 2); }
-
-  // Draw axes
-  ctx.strokeStyle = '#ccc'; ctx.lineWidth = 1;
-  ctx.beginPath(); ctx.moveTo(pad, pad); ctx.lineTo(pad, h - pad); ctx.lineTo(w - pad, h - pad); ctx.stroke();
-
-  // Draw grid lines horizontally (3)
-  ctx.strokeStyle = '#f0f0f0';
-  for (let i = 0; i <= 4; i++) {
-    const y = pad + (i / 4) * (h - pad * 2);
-    ctx.beginPath(); ctx.moveTo(pad, y); ctx.lineTo(w - pad, y); ctx.stroke();
-  }
-
-  // Draw accelerometer series
-  function drawSeries(arr, color) {
-    ctx.strokeStyle = color; ctx.lineWidth = 2; ctx.beginPath();
-    arr.forEach((v, i) => {
-      const xP = tx(times[i]);
-      const yP = ty(v);
-      if (i === 0) ctx.moveTo(xP, yP); else ctx.lineTo(xP, yP);
+    // Draw series
+    seriesList.forEach(s => {
+      ctx.strokeStyle = s.color; ctx.lineWidth = 2; ctx.beginPath();
+      s.data.forEach((v,i) => {
+        const xP = tx(s.times[i]); const yP = ty(v);
+        if (i === 0) ctx.moveTo(xP,yP); else ctx.lineTo(xP,yP);
+      });
+      if (s.dashed) { ctx.setLineDash([4,2]); } else { ctx.setLineDash([]); }
+      ctx.stroke();
     });
-    ctx.stroke();
+    ctx.setLineDash([]);
+
+    // Legend
+    ctx.fillStyle = '#000'; ctx.font = '12px sans-serif';
+    let xLegend = pad + 4;
+    seriesList.forEach(s => {
+      ctx.fillStyle = '#000'; ctx.fillText(s.label, xLegend, pad + 12);
+      ctx.fillStyle = s.color; ctx.fillRect(xLegend + 20, pad + 4, 12, 8);
+      xLegend += 90;
+    });
+
+    // Optional title/text
+    if (options.title) {
+      ctx.fillStyle = '#333'; ctx.font = '14px sans-serif';
+      ctx.fillText(options.title, pad, 16);
+    }
   }
 
-  drawSeries(xs, '#d9534f');
-  drawSeries(ys, '#5cb85c');
-  drawSeries(zs, '#5bc0de');
+  // Prepare common time axis and arrays
+  if (!accRecorder || accRecorder.length === 0) {
+    if (accCanvas) { accCanvas.getContext('2d').clearRect(0,0,accCanvas.width,accCanvas.height); accCanvas.getContext('2d').fillStyle='#666'; accCanvas.getContext('2d').fillText('No acceleration samples',10,20); }
+    if (gyroCanvas) { gyroCanvas.getContext('2d').clearRect(0,0,gyroCanvas.width,gyroCanvas.height); gyroCanvas.getContext('2d').fillStyle='#666'; gyroCanvas.getContext('2d').fillText('No gyroscope samples',10,20); }
+    return;
+  }
+  const times = accRecorder.map(s => s.timestamp);
+  const xs = accRecorder.map(s => (s.x!=null)?s.x:0);
+  const ys = accRecorder.map(s => (s.y!=null)?s.y:0);
+  const zs = accRecorder.map(s => (s.z!=null)?s.z:0);
+  const alpha = accRecorder.map(s => (s.gyroAlpha!=null)?s.gyroAlpha:0);
+  const beta  = accRecorder.map(s => (s.gyroBeta!=null)?s.gyroBeta:0);
+  const gamma = accRecorder.map(s => (s.gyroGamma!=null)?s.gyroGamma:0);
+  const gmag = accRecorder.map((s,i)=>Math.sqrt(alpha[i]*alpha[i]+beta[i]*beta[i]+gamma[i]*gamma[i]||0));
 
-  // Draw gyro magnitude (purple)
-  ctx.setLineDash([4,2]);
-  drawSeries(gmag, '#6f42c1');
-  ctx.setLineDash([]);
+  // draw acceleration (x,y,z) on accCanvas
+  if (accCanvas) {
+    drawOnCanvas(accCanvas, [
+      { label: 'x', data: xs, times, color: '#d9534f' },
+      { label: 'y', data: ys, times, color: '#5cb85c' },
+      { label: 'z', data: zs, times, color: '#5bc0de' }
+    ], { title: 'Acceleration (m/s²) — Mean Sampling Rate: ' + (function(){
+        const tMin = Math.min(...times), tMax = Math.max(...times);
+        const dur = (tMax - tMin)/1000; return (dur>0? (accRecorder.length/dur).toFixed(1)+' Hz':'0 Hz');
+      })()
+    });
+  }
 
-  // Legend (extend to include gyro)
-  ctx.fillStyle = '#000'; ctx.font = '12px sans-serif';
-  ctx.fillText('x', pad + 4, pad + 12); ctx.fillStyle = '#d9534f'; ctx.fillRect(pad + 18, pad + 4, 12, 8);
-  ctx.fillStyle = '#000'; ctx.fillText('y', pad + 60, pad + 12); ctx.fillStyle = '#5cb85c'; ctx.fillRect(pad + 74, pad + 4, 12, 8);
-  ctx.fillStyle = '#000'; ctx.fillText('z', pad + 116, pad + 12); ctx.fillStyle = '#5bc0de'; ctx.fillRect(pad + 130, pad + 4, 12, 8);
-  ctx.fillStyle = '#000'; ctx.fillText('gyro |ω|', pad + 168, pad + 12); ctx.fillStyle = '#6f42c1'; ctx.fillRect(pad + 228, pad + 4, 12, 8);
+  // draw gyroscope (alpha,beta,gamma and magnitude as dashed) on gyroCanvas
+  if (gyroCanvas) {
+    drawOnCanvas(gyroCanvas, [
+      { label: 'alpha', data: alpha, times, color: '#6f42c1' },
+      { label: 'beta',  data: beta,  times, color: '#20c997' },
+      { label: 'gamma', data: gamma, times, color: '#fd7e14' },
+      { label: '|ω|',   data: gmag,  times, color: '#343a40', dashed: true }
+    ], { title: 'Gyroscope (deg/s)' });
+  }
+}
+
+function drawTimedGraph(accRecorder) {
+  const accCanvas = document.getElementById('timedAccCanvas');
+  const gyroCanvas = document.getElementById('timedGyroCanvas');
+  if (!accCanvas && !gyroCanvas) return;
+
+  if (!accRecorder || accRecorder.length === 0) {
+    if (accCanvas) { accCanvas.getContext('2d').clearRect(0,0,accCanvas.width,accCanvas.height); accCanvas.getContext('2d').fillStyle='#666'; accCanvas.getContext('2d').fillText('No samples to display',10,20); }
+    if (gyroCanvas) { gyroCanvas.getContext('2d').clearRect(0,0,gyroCanvas.width,gyroCanvas.height); gyroCanvas.getContext('2d').fillStyle='#666'; gyroCanvas.getContext('2d').fillText('No samples to display',10,20); }
+    return;
+  }
+
+  // reuse logic from showAccGraph but map to timed canvases
+  const times = accRecorder.map(s => s.timestamp);
+  const xs = accRecorder.map(s => (s.x!=null)?s.x:0);
+  const ys = accRecorder.map(s => (s.y!=null)?s.y:0);
+  const zs = accRecorder.map(s => (s.z!=null)?s.z:0);
+  const alpha = accRecorder.map(s => (s.gyroAlpha!=null)?s.gyroAlpha:0);
+  const beta  = accRecorder.map(s => (s.gyroBeta!=null)?s.gyroBeta:0);
+  const gamma = accRecorder.map(s => (s.gyroGamma!=null)?s.gyroGamma:0);
+  const gmag = accRecorder.map((s,i)=>Math.sqrt(alpha[i]*alpha[i]+beta[i]*beta[i]+gamma[i]*gamma[i]||0));
+
+  // internal draw helper (duplicate from showAccGraph scope)
+  function drawOnCanvas(canvas, seriesList, options = {}) {
+    const ctx = canvas.getContext('2d');
+    const w = canvas.width; const h = canvas.height;
+    ctx.clearRect(0,0,w,h);
+    if (!seriesList || seriesList.length === 0 || seriesList[0].data.length === 0) {
+      ctx.fillStyle = '#666'; ctx.fillText('No samples to display', 10, 20); return;
+    }
+    const times = seriesList[0].times;
+    const tMin = Math.min(...times); const tMax = Math.max(...times);
+    const vals = [].concat(...seriesList.map(s => s.data));
+    const vMin = Math.min(...vals); const vMax = Math.max(...vals);
+    const pad = 10;
+    function tx(t) { return pad + ((t - tMin) / (tMax - tMin || 1)) * (w - pad * 2); }
+    function ty(v) { return h - pad - ((v - vMin) / (vMax - vMin || 1)) * (h - pad * 2); }
+
+    ctx.strokeStyle = '#ccc'; ctx.lineWidth = 1; ctx.beginPath(); ctx.moveTo(pad,pad); ctx.lineTo(pad,h-pad); ctx.lineTo(w-pad,h-pad); ctx.stroke();
+    ctx.strokeStyle = '#f0f0f0';
+    for (let i=0;i<=4;i++){ const y = pad + (i/4)*(h-pad*2); ctx.beginPath(); ctx.moveTo(pad,y); ctx.lineTo(w-pad,y); ctx.stroke(); }
+
+    seriesList.forEach(s => {
+      ctx.strokeStyle = s.color; ctx.lineWidth = 2; ctx.beginPath();
+      s.data.forEach((v,i) => {
+        const xP = tx(s.times[i]); const yP = ty(v);
+        if (i === 0) ctx.moveTo(xP,yP); else ctx.lineTo(xP,yP);
+      });
+      if (s.dashed) ctx.setLineDash([4,2]); else ctx.setLineDash([]);
+      ctx.stroke();
+    });
+    ctx.setLineDash([]);
+
+    // Legend
+    ctx.fillStyle = '#000'; ctx.font = '12px sans-serif';
+    let xLegend = pad + 4;
+    seriesList.forEach(s => {
+      ctx.fillStyle = '#000'; ctx.fillText(s.label, xLegend, pad + 12);
+      ctx.fillStyle = s.color; ctx.fillRect(xLegend + 20, pad + 4, 12, 8);
+      xLegend += 90;
+    });
+
+    if (options.title) { ctx.fillStyle = '#333'; ctx.font = '14px sans-serif'; ctx.fillText(options.title, pad, 16); }
+  }
+
+  if (accCanvas) {
+    drawOnCanvas(accCanvas, [
+      { label: 'x', data: xs, times, color: '#d9534f' },
+      { label: 'y', data: ys, times, color: '#5cb85c' },
+      { label: 'z', data: zs, times, color: '#5bc0de' }
+    ], { title: 'Acceleration (m/s²)' });
+  }
+  if (gyroCanvas) {
+    drawOnCanvas(gyroCanvas, [
+      { label: 'alpha', data: alpha, times, color: '#6f42c1' },
+      { label: 'beta',  data: beta,  times, color: '#20c997' },
+      { label: 'gamma', data: gamma, times, color: '#fd7e14' },
+      { label: '|ω|',   data: gmag,  times, color: '#343a40', dashed: true }
+    ], { title: 'Gyroscope (deg/s) — Mean Sampling Rate: ' + (function(){
+        const tMin = Math.min(...times), tMax = Math.max(...times);
+        const dur = (tMax - tMin)/1000; return (dur>0? (accRecorder.length/dur).toFixed(1)+' Hz':'0 Hz');
+      })()
+    });
+  }
 }
 
 // Play a simple tone for a given duration (ms) and frequency (Hz)
@@ -557,32 +660,88 @@ function setupTimedAcceleration() {
 }
 
 function drawTimedGraph(accRecorder) {
-  const canvas = document.getElementById('timedAccCanvas');
-  if (!canvas) return;
-  const ctx = canvas.getContext('2d');
-  const w = canvas.width; const h = canvas.height;
-  ctx.clearRect(0,0,w,h);
-  if (!accRecorder || accRecorder.length === 0) { ctx.fillStyle='#666'; ctx.fillText('No samples to display',10,20); return; }
+  const accCanvas = document.getElementById('timedAccCanvas');
+  const gyroCanvas = document.getElementById('timedGyroCanvas');
+  if (!accCanvas && !gyroCanvas) return;
+
+  if (!accRecorder || accRecorder.length === 0) {
+    if (accCanvas) { accCanvas.getContext('2d').clearRect(0,0,accCanvas.width,accCanvas.height); accCanvas.getContext('2d').fillStyle='#666'; accCanvas.getContext('2d').fillText('No samples to display',10,20); }
+    if (gyroCanvas) { gyroCanvas.getContext('2d').clearRect(0,0,gyroCanvas.width,gyroCanvas.height); gyroCanvas.getContext('2d').fillStyle='#666'; gyroCanvas.getContext('2d').fillText('No samples to display',10,20); }
+    return;
+  }
+
+  // reuse logic from showAccGraph but map to timed canvases
   const times = accRecorder.map(s => s.timestamp);
-  const xs = accRecorder.map(s => s.x||0);
-  const ys = accRecorder.map(s => s.y||0);
-  const zs = accRecorder.map(s => s.z||0);
-  const gmag = accRecorder.map(s => {
-    const a = s.gyroAlpha || 0, b = s.gyroBeta || 0, c = s.gyroGamma || 0;
-    return Math.sqrt(a*a + b*b + c*c);
-  });
-  const tMin = Math.min(...times); const tMax = Math.max(...times);
-  // ...existing meanSamplingRate text ...
-  const vMin = Math.min(...xs,...ys,...zs,...gmag); const vMax = Math.max(...xs,...ys,...zs,...gmag); const pad=10;
-  function tx(t){ return pad+((t-tMin)/(tMax-tMin||1))*(w-pad*2); }
-  function ty(v){ return h-pad-((v-vMin)/(vMax-vMin||1))*(h-pad*2); }
-  ctx.strokeStyle='#ccc'; ctx.lineWidth=1; ctx.beginPath(); ctx.moveTo(pad,pad); ctx.lineTo(pad,h-pad); ctx.lineTo(w-pad,h-pad); ctx.stroke();
-  ctx.strokeStyle='#f0f0f0'; for(let i=0;i<=4;i++){ const y = pad+(i/4)*(h-pad*2); ctx.beginPath(); ctx.moveTo(pad,y); ctx.lineTo(w-pad,y); ctx.stroke(); }
-  function drawSeries(arr,color){ ctx.strokeStyle=color; ctx.lineWidth=2; ctx.beginPath(); arr.forEach((v,i)=>{ const xP=tx(times[i]); const yP=ty(v); if(i===0) ctx.moveTo(xP,yP); else ctx.lineTo(xP,yP); }); ctx.stroke(); }
-  drawSeries(xs,'#d9534f'); drawSeries(ys,'#5cb85c'); drawSeries(zs,'#5bc0de');
-  ctx.setLineDash([4,2]);
-  drawSeries(gmag,'#6f42c1');
-  ctx.setLineDash([]);
+  const xs = accRecorder.map(s => (s.x!=null)?s.x:0);
+  const ys = accRecorder.map(s => (s.y!=null)?s.y:0);
+  const zs = accRecorder.map(s => (s.z!=null)?s.z:0);
+  const alpha = accRecorder.map(s => (s.gyroAlpha!=null)?s.gyroAlpha:0);
+  const beta  = accRecorder.map(s => (s.gyroBeta!=null)?s.gyroBeta:0);
+  const gamma = accRecorder.map(s => (s.gyroGamma!=null)?s.gyroGamma:0);
+  const gmag = accRecorder.map((s,i)=>Math.sqrt(alpha[i]*alpha[i]+beta[i]*beta[i]+gamma[i]*gamma[i]||0));
+
+  // internal draw helper (duplicate from showAccGraph scope)
+  function drawOnCanvas(canvas, seriesList, options = {}) {
+    const ctx = canvas.getContext('2d');
+    const w = canvas.width; const h = canvas.height;
+    ctx.clearRect(0,0,w,h);
+    if (!seriesList || seriesList.length === 0 || seriesList[0].data.length === 0) {
+      ctx.fillStyle = '#666'; ctx.fillText('No samples to display', 10, 20); return;
+    }
+    const times = seriesList[0].times;
+    const tMin = Math.min(...times); const tMax = Math.max(...times);
+    const vals = [].concat(...seriesList.map(s => s.data));
+    const vMin = Math.min(...vals); const vMax = Math.max(...vals);
+    const pad = 10;
+    function tx(t) { return pad + ((t - tMin) / (tMax - tMin || 1)) * (w - pad * 2); }
+    function ty(v) { return h - pad - ((v - vMin) / (vMax - vMin || 1)) * (h - pad * 2); }
+
+    ctx.strokeStyle = '#ccc'; ctx.lineWidth = 1; ctx.beginPath(); ctx.moveTo(pad,pad); ctx.lineTo(pad,h-pad); ctx.lineTo(w-pad,h-pad); ctx.stroke();
+    ctx.strokeStyle = '#f0f0f0';
+    for (let i=0;i<=4;i++){ const y = pad + (i/4)*(h-pad*2); ctx.beginPath(); ctx.moveTo(pad,y); ctx.lineTo(w-pad,y); ctx.stroke(); }
+
+    seriesList.forEach(s => {
+      ctx.strokeStyle = s.color; ctx.lineWidth = 2; ctx.beginPath();
+      s.data.forEach((v,i) => {
+        const xP = tx(s.times[i]); const yP = ty(v);
+        if (i === 0) ctx.moveTo(xP,yP); else ctx.lineTo(xP,yP);
+      });
+      if (s.dashed) ctx.setLineDash([4,2]); else ctx.setLineDash([]);
+      ctx.stroke();
+    });
+    ctx.setLineDash([]);
+
+    // Legend
+    ctx.fillStyle = '#000'; ctx.font = '12px sans-serif';
+    let xLegend = pad + 4;
+    seriesList.forEach(s => {
+      ctx.fillStyle = '#000'; ctx.fillText(s.label, xLegend, pad + 12);
+      ctx.fillStyle = s.color; ctx.fillRect(xLegend + 20, pad + 4, 12, 8);
+      xLegend += 90;
+    });
+
+    if (options.title) { ctx.fillStyle = '#333'; ctx.font = '14px sans-serif'; ctx.fillText(options.title, pad, 16); }
+  }
+
+  if (accCanvas) {
+    drawOnCanvas(accCanvas, [
+      { label: 'x', data: xs, times, color: '#d9534f' },
+      { label: 'y', data: ys, times, color: '#5cb85c' },
+      { label: 'z', data: zs, times, color: '#5bc0de' }
+    ], { title: 'Acceleration (m/s²)' });
+  }
+  if (gyroCanvas) {
+    drawOnCanvas(gyroCanvas, [
+      { label: 'alpha', data: alpha, times, color: '#6f42c1' },
+      { label: 'beta',  data: beta,  times, color: '#20c997' },
+      { label: 'gamma', data: gamma, times, color: '#fd7e14' },
+      { label: '|ω|',   data: gmag,  times, color: '#343a40', dashed: true }
+    ], { title: 'Gyroscope (deg/s) — Mean Sampling Rate: ' + (function(){
+        const tMin = Math.min(...times), tMax = Math.max(...times);
+        const dur = (tMax - tMin)/1000; return (dur>0? (accRecorder.length/dur).toFixed(1)+' Hz':'0 Hz');
+      })()
+    });
+  }
 }
 
 // Replace CSV to include gyro fields
