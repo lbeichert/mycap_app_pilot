@@ -11,6 +11,10 @@ const config = {
   lengthOfTest: parseInt(injectedParams.length_of_test)
                 || parseInt(urlParams.get('length_of_test'))
                 || 3,   // default 3 seconds
+  // countdown before recording starts (seconds)
+  countdownSeconds: parseInt(injectedParams.countdown_seconds)
+                    || parseInt(urlParams.get('countdown_seconds'))
+                    || 3,
   intendedUseDescription: injectedParams.intendedUseDescription
                           || urlParams.get('intendedUseDescription')
                           || 'Welcome to the Custom Active Task Demo. Please follow the instructions below.'
@@ -127,6 +131,7 @@ function renderPage(index) {
                <button id="stopAcc" class="btn btn-secondary" disabled>Stop</button>
              </div>
              <p id="accStatus">Samples: 0</p>
+            <p id="accCountdown" style="font-size:1.25em;font-weight:bold;display:none;"> </p>
              <canvas id="accCanvas" width="600" height="200" style="width:100%;max-width:600px;background:#fff;border:1px solid #ddd;"></canvas>
              <div class="mt-2">
                <button id="accNext" class="btn btn-primary" style="display:none;margin-right:8px;">Next</button>
@@ -266,20 +271,76 @@ function setupCaptureAcceleration() {
   startBtn.addEventListener('click', async () => {
     const ok = await requestPermissionIfNeeded();
     if (!ok) { status.textContent = 'Permission denied.'; return; }
+
+    // Prepare recorder and UI for countdown -> recording
     accRecorder = [];
-    accStartTime = Date.now();
-    window.addEventListener('devicemotion', accHandler);
+    let countdown = config.countdownSeconds || 0;
+    const countdownEl = document.getElementById('accCountdown');
+    if (countdown > 0) {
+      countdownEl.style.display = 'block';
+      countdownEl.textContent = `Starting in ${countdown}...`;
+    } else {
+      countdownEl.style.display = 'none';
+    }
+
     startBtn.disabled = true;
     stopBtn.disabled = false;
-    status.textContent = 'Recording...';
+
+    // If countdown > 0, show countdown and delay start; allow Stop to cancel
+    let countdownTimer = null;
+    let cancelled = false;
+
+    function finalizeStart() {
+      if (cancelled) return;
+      countdownEl.style.display = 'none';
+      accStartTime = Date.now();
+      window.addEventListener('devicemotion', accHandler);
+      status.textContent = 'Recording...';
+
+      // Play a short beep to indicate recording start
+      try { playBeep(); } catch (e) { /* ignore audio errors */ }
+    }
+
+    if (countdown > 0) {
+      countdownTimer = setInterval(() => {
+        countdown -= 1;
+        if (countdown > 0) {
+          countdownEl.textContent = `Starting in ${countdown}...`;
+        } else {
+          clearInterval(countdownTimer);
+          finalizeStart();
+        }
+      }, 1000);
+    } else {
+      finalizeStart();
+    }
+
+    // Wire Stop to cancel countdown if pressed before start
+
+    const stopDuringCountdown = () => {
+      cancelled = true;
+      if (countdownTimer) { clearInterval(countdownTimer); countdownTimer = null; }
+      countdownEl.style.display = 'none';
+      startBtn.disabled = false;
+      stopBtn.disabled = true;
+      status.textContent = 'Cancelled.';
+      // remove this handler to avoid double-execution when real stop happens
+      stopBtn.removeEventListener('click', stopDuringCountdown);
+    };
+    // Add temporary listener which will be removed when real stop handler runs
+    stopBtn.addEventListener('click', stopDuringCountdown);
   });
 
   stopBtn.addEventListener('click', () => {
-    window.removeEventListener('devicemotion', accHandler);
+    // Remove motion listener (safe to call even if not recording)
+    try { window.removeEventListener('devicemotion', accHandler); } catch (e) {}
     startBtn.disabled = false;
     stopBtn.disabled = true;
     result.acceleration = accRecorder;
     status.textContent = `Stopped. Samples: ${accRecorder.length}`;
+    // Clear any visible countdown if present
+    const countdownEl = document.getElementById('accCountdown');
+    if (countdownEl) { countdownEl.style.display = 'none'; }
     // Draw basic graph and show Next button
     showAccGraph(accRecorder);
     const nextBtn = document.getElementById('accNext');
@@ -352,6 +413,35 @@ function showAccGraph(accRecorder) {
   ctx.fillStyle = '#000'; ctx.fillText('z', pad + 116, pad + 12); ctx.fillStyle = '#5bc0de'; ctx.fillRect(pad + 130, pad + 4, 12, 8);
 }
 
+// Play a short beep using WebAudio to indicate recording start
+function playBeep() {
+  try {
+    const AudioContext = window.AudioContext || window.webkitAudioContext;
+    if (!AudioContext) return;
+    const ctx = new AudioContext();
+    // create oscillator for short beep
+    const o = ctx.createOscillator();
+    const g = ctx.createGain();
+    o.type = 'sine';
+    o.frequency.value = 880; // A5-ish beep
+    g.gain.value = 0.0001; // start near silence to avoid pops
+    o.connect(g);
+    g.connect(ctx.destination);
+
+    // ramp up quickly and stop after 150ms
+    const now = ctx.currentTime;
+    g.gain.setValueAtTime(0.0001, now);
+    g.gain.exponentialRampToValueAtTime(0.2, now + 0.01);
+    o.start(now);
+    g.gain.exponentialRampToValueAtTime(0.0001, now + 0.15);
+    o.stop(now + 0.16);
+    // close context shortly after to release audio hardware
+    setTimeout(() => { try { ctx.close(); } catch (e) {} }, 500);
+  } catch (e) {
+    // ignore audio errors
+  }
+}
+/**************** Error Prompt ****************/
 /**************** Error Prompt ****************/
 function throwError() {
   const errJson = JSON.stringify({ error: true });
