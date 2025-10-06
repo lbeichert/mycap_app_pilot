@@ -90,7 +90,7 @@ function renderPage(index) {
 
   if (page.type === 'intro') {
     html += `<h2>${page.title}</h2>`;
-    html += `<p style="font-size:0.9em;color:#666;margin-top:8px;">Version from 2025-10-06 22:01</p>`;
+    html += `<p style="font-size:0.9em;color:#666;margin-top:8px;">Version from 2025-10-06 22:08</p>`;
     page.instructions.forEach(i => html += `<p>${i}</p>`);
     html += `<div class="card mb-3"><div class="card-body">
                <h5 class="card-title">URL Parameters</h5>
