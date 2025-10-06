@@ -10,30 +10,26 @@ const config = {
               || 'defaultIdentifier',
   lengthOfTest: parseInt(injectedParams.length_of_test)
                 || parseInt(urlParams.get('length_of_test'))
-                || 3,   // default 3 seconds
-  // countdown before recording starts (seconds)
+                || 10,   // default 10 seconds
   countdownSeconds: parseInt(injectedParams.countdown_seconds)
                     || parseInt(urlParams.get('countdown_seconds'))
                     || 3,
   intendedUseDescription: injectedParams.intendedUseDescription
                           || urlParams.get('intendedUseDescription')
-                          || 'Welcome to the Custom Active Task Demo. Please follow the instructions below.',
+                          || 'Welcome. These instructions can be configured within redcap.',
   // Beep configuration: frequency in Hz and duration in milliseconds.
-  // Can be overridden via injectedParams.beep_frequency_hz or URL param beep_frequency_hz
-  // and injectedParams.beep_duration_ms or URL param beep_duration_ms.
-  beepFrequencyHz: parseInt(injectedParams.beep_frequency_hz)
-                   || parseInt(urlParams.get('beep_frequency_hz'))
+  beepFrequencyStartHz: parseInt(injectedParams.beep_frequency_start_hz)
+                   || parseInt(urlParams.get('beep_frequency_start_hz'))
                    || 880,
+  beepFrequencyEndHz: parseInt(injectedParams.beep_frequency_end_hz)
+                   || parseInt(urlParams.get('beep_frequency_end_hz'))
+                   || 440,                   
   beepDurationMs: parseInt(injectedParams.beep_duration_ms)
                   || parseInt(urlParams.get('beep_duration_ms'))
-                  || 150
+                  || 750
 };
 
 let result = {
-  rightHand: {},
-  image: null,
-  audio: null,
-  location: { latitude: null, longitude: null },
   acceleration: null
 };
 
@@ -43,7 +39,6 @@ let totalPages = 0;
 
 let testRunning = false;
 let testStartTime = 0;
-let tapCount = 0;
 let samples = [];
 let accEvents = [];
 let testInterval = null;
@@ -53,13 +48,12 @@ function initPages() {
   pages = [
     {
       type: 'intro',
-      title: 'Capture of Acceleration Data 19:39',
+      title: 'Capture of Acceleration Data (2025-10-06 21:15)',
       instructions: [
         config.intendedUseDescription,
-        `This test will capture acceleration data for as long as you like.`
+        `This is a demo app to capture acceleration data (free and timed).`
       ]
     },
-    // { type: 'test', hand: 'RIGHT' },
     {
       type: 'acceleration',
       title: 'Capture Acceleration',
@@ -68,7 +62,7 @@ function initPages() {
     {
       type: 'timedAcceleration',
       title: 'Timed Acceleration Capture',
-      instructions: ['Configure the measurement duration and countdown, then press Start. The device will record acceleration automatically for the configured duration.']
+      instructions: ['After you press Start, the app will count down and record for a fixed time as specified.']
     },
     // {
     //   type: 'errorPrompt',
@@ -96,6 +90,7 @@ function renderPage(index) {
 
   if (page.type === 'intro') {
     html += `<h2>${page.title}</h2>`;
+    html += `<p style="font-size:0.9em;color:#666;margin-top:8px;">Version from 2025-10-06 22:01</p>`;
     page.instructions.forEach(i => html += `<p>${i}</p>`);
     html += `<div class="card mb-3"><div class="card-body">
                <h5 class="card-title">URL Parameters</h5>
@@ -103,25 +98,13 @@ function renderPage(index) {
              </div></div>
              <button id="nextButton" class="btn btn-primary">Next</button>`;
   }
-  else if (page.type === 'test') {
-    html += `<h2>Tapping Speed Test</h2>
-             <div class="progress mb-3">
-               <div id="progressBar" class="progress-bar" style="width:0%"></div>
-             </div>
-             <p>Total Taps: <span id="tapCount">0</span></p>
-             <div class="d-flex justify-content-center">
-               <button id="rightButton" class="tap-button">Tap</button>
-             </div>`;
-  }
   else if (page.type === 'timedAcceleration') {
     html += `<h2>${page.title}</h2>`;
     page.instructions.forEach(i => html += `<p>${i}</p>`);
     // Show configured (read-only) values - parameters come from injectedParams/URL or defaults
     html += `<div class="card mb-3"><div class="card-body">
-               <p><strong>Measurement duration:</strong> ${config.lengthOfTest} seconds</p>
                <p><strong>Countdown before start:</strong> ${config.countdownSeconds} seconds</p>
-               <p><strong>Beep duration:</strong> ${config.beepDurationMs} ms</p>
-               <p style="font-size:0.9em;color:#666;margin-top:8px;">These values are configured via host parameters and are not editable here.</p>
+               <p><strong>Measurement duration:</strong> ${config.lengthOfTest} seconds</p>
              </div></div>
              <div id="timedControls" class="mb-3">
                <button id="startTimed" class="btn btn-primary">Start</button>
@@ -142,6 +125,7 @@ function renderPage(index) {
     html += `<div id="accControls" class="mb-3">
                <button id="startAcc" class="btn btn-primary">Start</button>
                <button id="stopAcc" class="btn btn-secondary" disabled>Stop</button>
+               <button id="downloadCsv" class="btn btn-success" style="display:none;margin-left:8px;">Download CSV</button>
              </div>
              <p id="accStatus">Samples: 0</p>
             <p id="accCountdown" style="font-size:1.25em;font-weight:bold;display:none;"> </p>
@@ -177,7 +161,6 @@ function renderPage(index) {
   if (page.type === 'intro') {
     document.getElementById('nextButton').addEventListener('click', nextPage);
   }
-  if (page.type === 'test') setupTestPage();
   if (page.type === 'timedAcceleration') setupTimedAcceleration();
   if (page.type === 'acceleration') setupCaptureAcceleration();
   if (page.type === 'errorPrompt') {
@@ -204,55 +187,11 @@ function prevPage() {
   }
 }
 
-/**************** Test Logic ****************/
-function setupTestPage() {
-  testRunning = false; tapCount = 0; samples = []; accEvents = [];
-  document.getElementById('tapCount').textContent = '0';
-  document.getElementById('rightButton').addEventListener('click', e => {
-    if (!testRunning) startTest();
-    tapCount++;
-    document.getElementById('tapCount').textContent = tapCount;
-    samples.push({
-      locationX: e.clientX,
-      locationY: e.clientY,
-      buttonIdentifier: '.Right',
-      timestamp: Date.now() - testStartTime
-    });
-  });
-}
-function startTest() {
-  testRunning = true;
-  testStartTime = Date.now();
-  window.addEventListener('devicemotion', deviceMotionHandler);
-  testInterval = setInterval(() => {
-    const elapsed = Date.now() - testStartTime;
-    const pct = Math.min((elapsed / (config.lengthOfTest * 1000)) * 100, 100);
-    document.getElementById('progressBar').style.width = pct + '%';
-    if (elapsed >= config.lengthOfTest * 1000) stopTest();
-  }, 50);
-}
-function stopTest() {
-  clearInterval(testInterval);
-  testRunning = false;
-  window.removeEventListener('devicemotion', deviceMotionHandler);
-  const btn = document.getElementById('rightButton').getBoundingClientRect();
-  result.rightHand = {
-    buttonRect: { locationX: btn.left, locationY: btn.top, width: btn.width, height: btn.height },
-    stepViewSize: { width: window.innerWidth, height: window.innerHeight },
-    samples
-  };
-  result.rightHandAccData = accEvents;
-  setTimeout(nextPage, 500);
-}
-function deviceMotionHandler(ev) {
-  const a = ev.acceleration;
-  if (a) accEvents.push({ x: a.x, y: a.y, z: a.z, timestamp: Date.now() - testStartTime });
-}
-
-/**************** Capture Acceleration Data ****************/
+/**************** Untimed Acceleration Data Logic ****************/
 function setupCaptureAcceleration() {
   const startBtn = document.getElementById('startAcc');
   const stopBtn = document.getElementById('stopAcc');
+  const downloadBtn = document.getElementById('downloadCsv');
   const skipBtn = document.getElementById('skipAcc');
   const status = document.getElementById('accStatus');
 
@@ -260,10 +199,21 @@ function setupCaptureAcceleration() {
   let accStartTime = 0;
 
   function accHandler(ev) {
-    const a = ev.acceleration || ev.accelerationIncludingGravity;
-    if (!a) return;
+    // Capture accelerometer + gyroscope (rotationRate) if present
+    const a = ev.acceleration || ev.accelerationIncludingGravity || {};
+    const r = ev.rotationRate || {};
+    // If neither acceleration nor rotationRate present, skip
+    if (!a && !r) return;
     const ts = Date.now() - accStartTime;
-    accRecorder.push({ x: a.x, y: a.y, z: a.z, timestamp: ts });
+    accRecorder.push({
+      x: (a && typeof a.x !== 'undefined') ? a.x : null,
+      y: (a && typeof a.y !== 'undefined') ? a.y : null,
+      z: (a && typeof a.z !== 'undefined') ? a.z : null,
+      gyroAlpha: (r && typeof r.alpha !== 'undefined') ? r.alpha : null,
+      gyroBeta: (r && typeof r.beta !== 'undefined') ? r.beta : null,
+      gyroGamma: (r && typeof r.gamma !== 'undefined') ? r.gamma : null,
+      timestamp: ts
+    });
     status.textContent = `Samples: ${accRecorder.length}`;
   }
 
@@ -311,7 +261,7 @@ function setupCaptureAcceleration() {
       status.textContent = 'Recording...';
 
       // Play a short beep to indicate recording start
-      try { playBeep(); } catch (e) { /* ignore audio errors */ }
+      try { playTone(config.beepFrequencyStartHz, config.beepDurationMs); } catch (e) { /* ignore audio errors */ }
     }
 
     if (countdown > 0) {
@@ -361,6 +311,10 @@ function setupCaptureAcceleration() {
       nextBtn.style.display = 'inline-block';
       nextBtn.addEventListener('click', nextPage);
     }
+    if(downloadBtn) {
+      downloadBtn.style.display = 'inline-block';
+      downloadBtn.onclick = () => { downloadCSV(accRecorder); };
+    }
   });
 
   skipBtn.addEventListener('click', nextPage);
@@ -383,6 +337,11 @@ function showAccGraph(accRecorder) {
   const xs = accRecorder.map(s => s.x || 0);
   const ys = accRecorder.map(s => s.y || 0);
   const zs = accRecorder.map(s => s.z || 0);
+  // compute gyro magnitude (deg/s) if present
+  const gmag = accRecorder.map(s => {
+    const a = s.gyroAlpha || 0, b = s.gyroBeta || 0, c = s.gyroGamma || 0;
+    return Math.sqrt(a*a + b*b + c*c);
+  });
   const tMin = Math.min(...times);
   const tMax = Math.max(...times);
 
@@ -395,8 +354,9 @@ function showAccGraph(accRecorder) {
   ctx.font = '16px sans-serif';
   ctx.fillText(`Mean Sampling Rate: ${meanSamplingRate.toFixed(1)} Hz`, 10, 28);
 
-  const vMin = Math.min(...xs, ...ys, ...zs);
-  const vMax = Math.max(...xs, ...ys, ...zs);
+  // include gyro magnitude in min/max so it scales into the plotting area
+  const vMin = Math.min(...xs, ...ys, ...zs, ...gmag);
+  const vMax = Math.max(...xs, ...ys, ...zs, ...gmag);
   const pad = 10;
 
   function tx(t) { return pad + ((t - tMin) / (tMax - tMin || 1)) * (w - pad * 2); }
@@ -413,7 +373,7 @@ function showAccGraph(accRecorder) {
     ctx.beginPath(); ctx.moveTo(pad, y); ctx.lineTo(w - pad, y); ctx.stroke();
   }
 
-  // Draw each series helper
+  // Draw accelerometer series
   function drawSeries(arr, color) {
     ctx.strokeStyle = color; ctx.lineWidth = 2; ctx.beginPath();
     arr.forEach((v, i) => {
@@ -424,57 +384,25 @@ function showAccGraph(accRecorder) {
     ctx.stroke();
   }
 
-  // Plot x (red), y (green), z (blue)
   drawSeries(xs, '#d9534f');
   drawSeries(ys, '#5cb85c');
   drawSeries(zs, '#5bc0de');
 
-  // Legend
+  // Draw gyro magnitude (purple)
+  ctx.setLineDash([4,2]);
+  drawSeries(gmag, '#6f42c1');
+  ctx.setLineDash([]);
+
+  // Legend (extend to include gyro)
   ctx.fillStyle = '#000'; ctx.font = '12px sans-serif';
   ctx.fillText('x', pad + 4, pad + 12); ctx.fillStyle = '#d9534f'; ctx.fillRect(pad + 18, pad + 4, 12, 8);
   ctx.fillStyle = '#000'; ctx.fillText('y', pad + 60, pad + 12); ctx.fillStyle = '#5cb85c'; ctx.fillRect(pad + 74, pad + 4, 12, 8);
   ctx.fillStyle = '#000'; ctx.fillText('z', pad + 116, pad + 12); ctx.fillStyle = '#5bc0de'; ctx.fillRect(pad + 130, pad + 4, 12, 8);
-}
-
-// Play a short beep using WebAudio to indicate recording start
-// Play a short beep using WebAudio to indicate recording start
-function playBeep() {
-  try {
-    const AudioContext = window.AudioContext || window.webkitAudioContext;
-    if (!AudioContext) return;
-    const ctx = new AudioContext();
-    // create oscillator for short beep
-    const o = ctx.createOscillator();
-    const g = ctx.createGain();
-    o.type = 'sine';
-    // use config values with sensible defaults
-    const freq = Number(config.beepFrequencyHz) || 880;
-    const durMs = Math.max(10, Number(config.beepDurationMs) || 500); // at least 10ms
-    const rampUpMs = Math.min(10, Math.floor(durMs / 3)); // quick ramp but never longer than a third of duration
-
-    o.frequency.value = freq;
-    g.gain.value = 0.0001; // start near silence to avoid pops
-    o.connect(g);
-    g.connect(ctx.destination);
-
-    // ramp up quickly and stop after durMs
-    const now = ctx.currentTime;
-    g.gain.setValueAtTime(0.0001, now);
-    g.gain.exponentialRampToValueAtTime(0.2, now + rampUpMs / 1000);
-    o.start(now);
-    // ramp down to near silence at end of duration
-    g.gain.exponentialRampToValueAtTime(0.0001, now + durMs / 1000);
-    // stop a tiny bit after the gain reaches near-zero
-    o.stop(now + durMs / 1000 + 0.02);
-    // close context shortly after to release audio hardware
-    setTimeout(() => { try { ctx.close(); } catch (e) {} }, durMs + 300);
-  } catch (e) {
-    // ignore audio errors
-  }
+  ctx.fillStyle = '#000'; ctx.fillText('gyro |ω|', pad + 168, pad + 12); ctx.fillStyle = '#6f42c1'; ctx.fillRect(pad + 228, pad + 4, 12, 8);
 }
 
 // Play a simple tone for a given duration (ms) and frequency (Hz)
-function playTone(freq = 440, durationMs = 300) {
+function playTone(freq = 440, durationMs = 300, gainValue = 0.25, rampTimeMs = 10) {
   try {
     const AudioContext = window.AudioContext || window.webkitAudioContext;
     if (!AudioContext) return;
@@ -486,18 +414,21 @@ function playTone(freq = 440, durationMs = 300) {
     g.gain.value = 0.0001;
     o.connect(g); g.connect(ctx.destination);
     const now = ctx.currentTime;
+
+    // Use rampTimeMs as the minimum of rampTimeMs and durationMs / 4
+    rampTimeMs = Math.min(rampTimeMs, Math.floor(durationMs / 4));
+
     g.gain.setValueAtTime(0.0001, now);
-    g.gain.exponentialRampToValueAtTime(0.25, now + 0.01);
+    g.gain.exponentialRampToValueAtTime(gainValue, now + rampTimeMs / 1000);
     o.start(now);
-    g.gain.exponentialRampToValueAtTime(0.0001, now + durationMs / 1000);
-    o.stop(now + durationMs / 1000 + 0.02);
+
+    const decayStart = now + (durationMs - rampTimeMs) / 1000;
+    const decayEnd = now + durationMs / 1000;
+    g.gain.setValueAtTime(gainValue, decayStart);
+    g.gain.exponentialRampToValueAtTime(0.0001, decayEnd);
+    o.stop(decayEnd + 0.02);
     setTimeout(() => { try { ctx.close(); } catch (e) {} }, durationMs + 200);
   } catch (e) {}
-}
-
-// Play a long beep (used for start and end) - frequency and duration configurable
-function playLongBeep(ms, freq) {
-  try { playTone(freq || Number(config.beepFrequencyHz) || 880, ms || Number(config.beepDurationMs) || 400); } catch (e) {}
 }
 
 // Setup timed acceleration capture page logic
@@ -517,10 +448,19 @@ function setupTimedAcceleration() {
   let countdownTimer = null;
 
   function accHandler(ev) {
-    const a = ev.acceleration || ev.accelerationIncludingGravity;
-    if (!a) return;
+    const a = ev.acceleration || ev.accelerationIncludingGravity || {};
+    const r = ev.rotationRate || {};
+    if (!a && !r) return;
     const ts = Date.now() - startTime;
-    recorder.push({ x: a.x, y: a.y, z: a.z, timestamp: ts });
+    recorder.push({
+      x: (a && typeof a.x !== 'undefined') ? a.x : null,
+      y: (a && typeof a.y !== 'undefined') ? a.y : null,
+      z: (a && typeof a.z !== 'undefined') ? a.z : null,
+      gyroAlpha: (r && typeof r.alpha !== 'undefined') ? r.alpha : null,
+      gyroBeta: (r && typeof r.beta !== 'undefined') ? r.beta : null,
+      gyroGamma: (r && typeof r.gamma !== 'undefined') ? r.gamma : null,
+      timestamp: ts
+    });
     if (status) status.textContent = `Samples: ${recorder.length}`;
   }
 
@@ -560,8 +500,8 @@ function setupTimedAcceleration() {
       if (countdownEl) countdownEl.style.display = 'none';
       // Remove temporary countdown stop handler so it doesn't persist into recording
       if (stopBtn) stopBtn.removeEventListener('click', stopDuringCountdown);
-      // Indicate start with a short beep; use configured beep duration
-      playLongBeep(beepMs);
+      // Indicate start with tone
+      playTone(config.beepFrequencyStartHz, config.beepDurationMs);
       startTime = Date.now();
       window.addEventListener('devicemotion', accHandler);
       if (status) status.textContent = 'Recording...';
@@ -597,13 +537,13 @@ function setupTimedAcceleration() {
   });
 
   function stopRecording(isAutomated = false) {
-    try { window.removeEventListener('devicemotion', accHandler); } catch (e) {}
+    try { window.removeEventListener('devicemotion', accHandler); } catch (e) { }
     if (measurementTimer) { clearTimeout(measurementTimer); measurementTimer = null; }
     if (startBtn) startBtn.disabled = false;
     if (stopBtn) stopBtn.disabled = true;
     if (status) status.textContent = `Stopped. Samples: ${recorder.length}`;
-  // Use configured beep duration (avoid querying removed DOM input)
-  playLongBeep(Math.max(50, Number(config.beepDurationMs) || 50));
+    // Use configured beep duration (avoid querying removed DOM input)
+    playTone(config.beepFrequencyEndHz, config.beepDurationMs);
     result.acceleration = recorder;
     drawTimedGraph(recorder);
     if (downloadBtn) downloadBtn.style.display = 'inline-block';
@@ -627,23 +567,31 @@ function drawTimedGraph(accRecorder) {
   const xs = accRecorder.map(s => s.x||0);
   const ys = accRecorder.map(s => s.y||0);
   const zs = accRecorder.map(s => s.z||0);
+  const gmag = accRecorder.map(s => {
+    const a = s.gyroAlpha || 0, b = s.gyroBeta || 0, c = s.gyroGamma || 0;
+    return Math.sqrt(a*a + b*b + c*c);
+  });
   const tMin = Math.min(...times); const tMax = Math.max(...times);
-  const durationSec = (tMax - tMin)/1000;
-  const meanSamplingRate = durationSec>0 ? (accRecorder.length/durationSec):0;
-  ctx.fillStyle='#333'; ctx.font='16px sans-serif'; ctx.fillText(`Mean Sampling Rate: ${meanSamplingRate.toFixed(1)} Hz`,10,28);
-  const vMin = Math.min(...xs,...ys,...zs); const vMax = Math.max(...xs,...ys,...zs); const pad=10;
+  // ...existing meanSamplingRate text ...
+  const vMin = Math.min(...xs,...ys,...zs,...gmag); const vMax = Math.max(...xs,...ys,...zs,...gmag); const pad=10;
   function tx(t){ return pad+((t-tMin)/(tMax-tMin||1))*(w-pad*2); }
   function ty(v){ return h-pad-((v-vMin)/(vMax-vMin||1))*(h-pad*2); }
   ctx.strokeStyle='#ccc'; ctx.lineWidth=1; ctx.beginPath(); ctx.moveTo(pad,pad); ctx.lineTo(pad,h-pad); ctx.lineTo(w-pad,h-pad); ctx.stroke();
   ctx.strokeStyle='#f0f0f0'; for(let i=0;i<=4;i++){ const y = pad+(i/4)*(h-pad*2); ctx.beginPath(); ctx.moveTo(pad,y); ctx.lineTo(w-pad,y); ctx.stroke(); }
   function drawSeries(arr,color){ ctx.strokeStyle=color; ctx.lineWidth=2; ctx.beginPath(); arr.forEach((v,i)=>{ const xP=tx(times[i]); const yP=ty(v); if(i===0) ctx.moveTo(xP,yP); else ctx.lineTo(xP,yP); }); ctx.stroke(); }
   drawSeries(xs,'#d9534f'); drawSeries(ys,'#5cb85c'); drawSeries(zs,'#5bc0de');
+  ctx.setLineDash([4,2]);
+  drawSeries(gmag,'#6f42c1');
+  ctx.setLineDash([]);
 }
 
+// Replace CSV to include gyro fields
 function downloadCSV(arr) {
   if (!arr || arr.length===0) return;
-  let csv = 'timestamp_ms,x,y,z\n';
-  arr.forEach(r=>{ csv += `${r.timestamp},${r.x||''},${r.y||''},${r.z||''}\n`; });
+  let csv = 'timestamp_ms,x,y,z,gyro_alpha,gyro_beta,gyro_gamma\n';
+  arr.forEach(r=>{
+    csv += `${r.timestamp},${r.x||''},${r.y||''},${r.z||''},${r.gyroAlpha||''},${r.gyroBeta||''},${r.gyroGamma||''}\n`;
+  });
   const blob = new Blob([csv], { type: 'text/csv' });
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a'); a.href = url; a.download = `${config.identifier || 'acc'}_acceleration.csv`;
@@ -664,7 +612,9 @@ function submitResults() {
   setTimeout(() => window.close(), 500);
 }
 
+// Add initialization (ensure DOM element '#app' exists before rendering)
+window.addEventListener('DOMContentLoaded', () => {
+  initPages();
+  renderPage(currentPageIndex);
+});
 
-/**************** Initialization ****************/
-initPages();
-renderPage(currentPageIndex);
