@@ -53,7 +53,7 @@ function initPages() {
   pages = [
     {
       type: 'intro',
-      title: 'Capture of Acceleration Data 19:32',
+      title: 'Capture of Acceleration Data 19:39',
       instructions: [
         config.intendedUseDescription,
         `This test will capture acceleration data for as long as you like.`
@@ -178,9 +178,7 @@ function renderPage(index) {
     document.getElementById('nextButton').addEventListener('click', nextPage);
   }
   if (page.type === 'test') setupTestPage();
-  if (page.type === 'captureImage') setupCaptureImage();
-  if (page.type === 'recordAudio') setupRecordAudio();
-  if (page.type === 'captureLocation') setupCaptureLocation();
+  if (page.type === 'timedAcceleration') setupTimedAcceleration();
   if (page.type === 'acceleration') setupCaptureAcceleration();
   if (page.type === 'errorPrompt') {
     document.getElementById('errorYes').addEventListener('click', throwError);
