@@ -48,7 +48,7 @@ function initPages() {
   pages = [
     {
       type: 'intro',
-      title: 'Capture of Acceleration Data (2025-10-06 21:15)',
+      title: 'Capture of Acceleration Data',
       instructions: [
         config.intendedUseDescription,
         `This is a demo app to capture acceleration data (free and timed).`
