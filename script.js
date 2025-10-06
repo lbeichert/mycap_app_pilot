@@ -17,8 +17,18 @@ const config = {
                     || 3,
   intendedUseDescription: injectedParams.intendedUseDescription
                           || urlParams.get('intendedUseDescription')
-                          || 'Welcome to the Custom Active Task Demo. Please follow the instructions below.'
+                          || 'Welcome to the Custom Active Task Demo. Please follow the instructions below.',
+  // Beep configuration: frequency in Hz and duration in milliseconds.
+  // Can be overridden via injectedParams.beep_frequency_hz or URL param beep_frequency_hz
+  // and injectedParams.beep_duration_ms or URL param beep_duration_ms.
+  beepFrequencyHz: parseInt(injectedParams.beep_frequency_hz)
+                   || parseInt(urlParams.get('beep_frequency_hz'))
+                   || 880,
+  beepDurationMs: parseInt(injectedParams.beep_duration_ms)
+                  || parseInt(urlParams.get('beep_duration_ms'))
+                  || 150
 };
+
 let result = {
   rightHand: {},
   image: null,
@@ -372,6 +382,16 @@ function showAccGraph(accRecorder) {
   const zs = accRecorder.map(s => s.z || 0);
   const tMin = Math.min(...times);
   const tMax = Math.max(...times);
+
+  // Calculate mean sampling rate (Hz)
+  const durationSec = (tMax - tMin) / 1000;
+  const meanSamplingRate = durationSec > 0 ? (accRecorder.length / durationSec) : 0;
+
+  // Draw mean sampling rate above the graph
+  ctx.fillStyle = '#333';
+  ctx.font = '16px sans-serif';
+  ctx.fillText(`Mean Sampling Rate: ${meanSamplingRate.toFixed(1)} Hz`, 10, 28);
+
   const vMin = Math.min(...xs, ...ys, ...zs);
   const vMax = Math.max(...xs, ...ys, ...zs);
   const pad = 10;
@@ -414,6 +434,7 @@ function showAccGraph(accRecorder) {
 }
 
 // Play a short beep using WebAudio to indicate recording start
+// Play a short beep using WebAudio to indicate recording start
 function playBeep() {
   try {
     const AudioContext = window.AudioContext || window.webkitAudioContext;
@@ -423,25 +444,32 @@ function playBeep() {
     const o = ctx.createOscillator();
     const g = ctx.createGain();
     o.type = 'sine';
-    o.frequency.value = 880; // A5-ish beep
+    // use config values with sensible defaults
+    const freq = Number(config.beepFrequencyHz) || 880;
+    const durMs = Math.max(10, Number(config.beepDurationMs) || 500); // at least 10ms
+    const rampUpMs = Math.min(10, Math.floor(durMs / 3)); // quick ramp but never longer than a third of duration
+
+    o.frequency.value = freq;
     g.gain.value = 0.0001; // start near silence to avoid pops
     o.connect(g);
     g.connect(ctx.destination);
 
-    // ramp up quickly and stop after 150ms
+    // ramp up quickly and stop after durMs
     const now = ctx.currentTime;
     g.gain.setValueAtTime(0.0001, now);
-    g.gain.exponentialRampToValueAtTime(0.2, now + 0.01);
+    g.gain.exponentialRampToValueAtTime(0.2, now + rampUpMs / 1000);
     o.start(now);
-    g.gain.exponentialRampToValueAtTime(0.0001, now + 0.15);
-    o.stop(now + 0.16);
+    // ramp down to near silence at end of duration
+    g.gain.exponentialRampToValueAtTime(0.0001, now + durMs / 1000);
+    // stop a tiny bit after the gain reaches near-zero
+    o.stop(now + durMs / 1000 + 0.02);
     // close context shortly after to release audio hardware
-    setTimeout(() => { try { ctx.close(); } catch (e) {} }, 500);
+    setTimeout(() => { try { ctx.close(); } catch (e) {} }, durMs + 300);
   } catch (e) {
     // ignore audio errors
   }
 }
-/**************** Error Prompt ****************/
+
 /**************** Error Prompt ****************/
 function throwError() {
   const errJson = JSON.stringify({ error: true });
